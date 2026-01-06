@@ -16,10 +16,19 @@ wip auth login
 ## Usage
 
 ```
-wip todos              List your recent todos
-wip todo create <msg>  Create a completed todo
-wip projects           List your projects
-wip status             Show your profile and streak
+wip todos                     List your recent todos
+wip todos --today             Today's todos only
+wip todos -p <project>        Filter by project hashtag
+wip todos -s 2026-01-01       Todos since date
+wip todos -n 50               Limit results
+
+wip todo create <message>     Create a completed todo
+wip todo view <id>            View a specific todo
+
+wip projects                  List your projects
+wip project view <id>         View a specific project
+
+wip status                    Show your profile and streak
 ```
 
 ## Requirements
@@ -30,4 +39,4 @@ wip status             Show your profile and streak
 
 ## API Key
 
-Get your API key from [wip.co/api](https://wip.co/api). Stored in `~/.config/wip/api_key`.
+Get your API key from [wip.co/settings/api_keys](https://wip.co/settings/api_keys). Stored in `~/.config/wip/api_key`.

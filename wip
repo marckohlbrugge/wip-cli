@@ -32,7 +32,11 @@ api() {
   local api_key
   api_key=$(get_api_key)
 
-  curl -s -X "$method" "${API_BASE}${endpoint}?api_key=${api_key}" \
+  # Handle endpoints that already have query params
+  local sep="?"
+  [[ "$endpoint" == *"?"* ]] && sep="&"
+
+  curl -s -X "$method" "${API_BASE}${endpoint}${sep}api_key=${api_key}" \
     -H "Content-Type: application/json" \
     "$@"
 }
@@ -70,7 +74,27 @@ cmd_auth() {
 cmd_todo() {
   case "${1:-list}" in
     list)
-      api GET /users/me/todos | jq -r '.data[] | "\(.created_at | split("T")[0])\t\(.body)"' | head -20 | while IFS=$'\t' read -r date body; do
+      shift 2>/dev/null || true
+      local since="" until="" project="" limit=20
+      while [[ $# -gt 0 ]]; do
+        case "$1" in
+          -s|--since)  since="$2"; shift 2 ;;
+          -u|--until)  until="$2"; shift 2 ;;
+          -p|--project) project="$2"; shift 2 ;;
+          -n|--limit)  limit="$2"; shift 2 ;;
+          --today)     since=$(date +%Y-%m-%d); shift ;;
+          *) shift ;;
+        esac
+      done
+
+      local params="?limit=${limit}"
+      [[ -n "$since" ]] && params="${params}&since=${since}T00:00:00Z"
+      [[ -n "$until" ]] && params="${params}&until=${until}T23:59:59Z"
+
+      local jq_filter='.data[]'
+      [[ -n "$project" ]] && jq_filter=".data[] | select(.projects[]?.hashtag == \"${project}\")"
+
+      api GET "/users/me/todos${params}" | jq -r "${jq_filter} | \"\(.created_at | split(\"T\")[0])\t\(.body)\"" | while IFS=$'\t' read -r date body; do
         printf "${DIM}%s${NC}  %s\n" "$date" "$body"
       done
       ;;
@@ -154,24 +178,31 @@ wip - CLI for wip.co
 Usage: wip <command> [subcommand] [args]
 
 Commands:
-  auth login       Authenticate with API key
-  auth status      Check authentication status
-  auth logout      Remove stored credentials
+  auth login          Authenticate with API key
+  auth status         Check authentication status
+  auth logout         Remove stored credentials
 
-  todo list        List your recent todos (default)
-  todo create <m>  Create a completed todo
-  todo view <id>   View a specific todo
+  todos [options]     List your recent todos
+    -p, --project <tag>   Filter by project hashtag
+    -s, --since <date>    Show todos since date (YYYY-MM-DD)
+    -u, --until <date>    Show todos until date (YYYY-MM-DD)
+    -n, --limit <n>       Number of todos (default: 20)
+    --today               Shortcut for --since today
 
-  project list     List your projects
-  project view <id> View a specific project
+  todo create <msg>   Create a completed todo
+  todo view <id>      View a specific todo
 
-  status           Show your profile and streak
+  projects            List your projects
+  project view <id>   View a specific project
+
+  status              Show your profile and streak
 
 Examples:
   wip auth login
-  wip todo create "Shipped new feature"
-  wip todo list
-  wip project list
+  wip todo create "Shipped new feature #myproject"
+  wip todos --today
+  wip todos -p wip --since 2026-01-01
+  wip projects
   wip status
 EOF
 }
@@ -180,7 +211,7 @@ EOF
 case "${1:-help}" in
   auth)    shift; cmd_auth "$@" ;;
   todo)    shift; cmd_todo "$@" ;;
-  todos)   cmd_todo list ;;
+  todos)   shift; cmd_todo list "$@" ;;
   project) shift; cmd_project "$@" ;;
   projects) cmd_project list ;;
   status)  cmd_status ;;
