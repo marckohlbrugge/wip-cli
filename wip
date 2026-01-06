@@ -1,0 +1,189 @@
+#!/usr/bin/env bash
+set -e
+
+# wip - CLI for wip.co API (gh-style commands)
+# API key stored in ~/.config/wip/api_key
+
+CONFIG_DIR="$HOME/.config/wip"
+API_KEY_FILE="$CONFIG_DIR/api_key"
+API_BASE="https://api.wip.co/v1"
+
+# Colors
+RED='\033[0;31m'
+GREEN='\033[0;32m'
+YELLOW='\033[0;33m'
+DIM='\033[0;90m'
+NC='\033[0m'
+
+error() { echo -e "${RED}Error:${NC} $1" >&2; exit 1; }
+success() { echo -e "${GREEN}✓${NC} $1"; }
+
+get_api_key() {
+  if [[ ! -f "$API_KEY_FILE" ]]; then
+    error "Not authenticated. Run: wip auth login"
+  fi
+  cat "$API_KEY_FILE"
+}
+
+api() {
+  local method="$1"
+  local endpoint="$2"
+  shift 2
+  local api_key
+  api_key=$(get_api_key)
+
+  curl -s -X "$method" "${API_BASE}${endpoint}?api_key=${api_key}" \
+    -H "Content-Type: application/json" \
+    "$@"
+}
+
+# Auth commands
+cmd_auth() {
+  case "${1:-login}" in
+    login)
+      echo -n "API key: "
+      read -r key
+      [[ -z "$key" ]] && error "API key required"
+      mkdir -p "$CONFIG_DIR"
+      echo "$key" > "$API_KEY_FILE"
+      chmod 600 "$API_KEY_FILE"
+      success "Authenticated"
+      ;;
+    status)
+      if [[ -f "$API_KEY_FILE" ]]; then
+        echo "Authenticated (key in $API_KEY_FILE)"
+      else
+        echo "Not authenticated"
+      fi
+      ;;
+    logout)
+      rm -f "$API_KEY_FILE"
+      success "Logged out"
+      ;;
+    *)
+      error "Unknown auth command: $1"
+      ;;
+  esac
+}
+
+# Todo commands
+cmd_todo() {
+  case "${1:-list}" in
+    list)
+      api GET /users/me/todos | jq -r '.data[] | "\(.created_at | split("T")[0])\t\(.body)"' | head -20 | while IFS=$'\t' read -r date body; do
+        printf "${DIM}%s${NC}  %s\n" "$date" "$body"
+      done
+      ;;
+    create)
+      shift
+      local body="$*"
+      [[ -z "$body" ]] && error "Usage: wip todo create <message>"
+
+      local json_body response
+      json_body=$(jq -n --arg body "$body" '{body: $body}')
+      response=$(api POST /todos -d "$json_body")
+
+      if echo "$response" | jq -e '.id' > /dev/null 2>&1; then
+        success "$(echo "$response" | jq -r '.body')"
+        echo -e "${DIM}$(echo "$response" | jq -r '.url')${NC}"
+      else
+        error "$(echo "$response" | jq -r '.error // "Failed to create todo"')"
+      fi
+      ;;
+    view)
+      local id="$2"
+      [[ -z "$id" ]] && error "Usage: wip todo view <id>"
+
+      local data body created_at username
+      data=$(api GET "/todos/${id}")
+      body=$(echo "$data" | jq -r '.body')
+      created_at=$(echo "$data" | jq -r '.created_at | split("T")[0]')
+      username=$(echo "$data" | jq -r '.user.username')
+
+      echo -e "${DIM}${created_at}${NC}  ${GREEN}@${username}${NC}"
+      echo "$body"
+      ;;
+    *)
+      error "Unknown todo command: $1. Try: list, create, view"
+      ;;
+  esac
+}
+
+# Project commands
+cmd_project() {
+  case "${1:-list}" in
+    list)
+      api GET /users/me/projects | jq -r '.data[] | "\(.hashtag)\t\(.pitch // "-")"' | while IFS=$'\t' read -r tag pitch; do
+        printf "${GREEN}#%-18s${NC}\t%s\n" "$tag" "$pitch"
+      done
+      ;;
+    view)
+      local id="$2"
+      [[ -z "$id" ]] && error "Usage: wip project view <id>"
+
+      local data
+      data=$(api GET "/projects/${id}")
+      echo "$data" | jq -r '"#\(.hashtag)\n\(.pitch // "No pitch")\nTodos: \(.todos_count)"'
+      ;;
+    *)
+      error "Unknown project command: $1. Try: list, view"
+      ;;
+  esac
+}
+
+# Status command (like gh status)
+cmd_status() {
+  local data
+  data=$(api GET /users/me)
+
+  local username streak best_streak todos_count
+  username=$(echo "$data" | jq -r '.username')
+  streak=$(echo "$data" | jq -r '.streak')
+  best_streak=$(echo "$data" | jq -r '.best_streak')
+  todos_count=$(echo "$data" | jq -r '.todos_count')
+
+  echo -e "${GREEN}@${username}${NC}"
+  echo -e "Streak: ${YELLOW}${streak}${NC} days (best: ${best_streak})"
+  echo -e "Total todos: ${todos_count}"
+}
+
+cmd_help() {
+  cat <<EOF
+wip - CLI for wip.co
+
+Usage: wip <command> [subcommand] [args]
+
+Commands:
+  auth login       Authenticate with API key
+  auth status      Check authentication status
+  auth logout      Remove stored credentials
+
+  todo list        List your recent todos (default)
+  todo create <m>  Create a completed todo
+  todo view <id>   View a specific todo
+
+  project list     List your projects
+  project view <id> View a specific project
+
+  status           Show your profile and streak
+
+Examples:
+  wip auth login
+  wip todo create "Shipped new feature"
+  wip todo list
+  wip project list
+  wip status
+EOF
+}
+
+# Main
+case "${1:-help}" in
+  auth)    shift; cmd_auth "$@" ;;
+  todo)    shift; cmd_todo "$@" ;;
+  todos)   cmd_todo list ;;
+  project) shift; cmd_project "$@" ;;
+  projects) cmd_project list ;;
+  status)  cmd_status ;;
+  help|--help|-h) cmd_help ;;
+  *)       error "Unknown command: $1. Run 'wip help' for usage." ;;
+esac
